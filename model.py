@@ -23,8 +23,40 @@ class SelfAttention(nn.Module):
 
   def forward(self, x): 
     B, T, C = x.size() # batch size, sequence length, embedding dimensionality (embed_dim)
-    ...
-    y = torch.randn_like(x)
+    head_dim = C // self.n_head
+
+    qkv = self.map_qkv(x)
+    q = qkv[..., :C]
+    k = qkv[..., C:2 * C]
+    v = qkv[..., 2 * C:]
+
+    q = q.view(B, T, self.n_head, head_dim).permute(0, 2, 1, 3).contiguous()
+    k = k.view(B, T, self.n_head, head_dim).permute(0, 2, 1, 3).contiguous()
+    v = v.view(B, T, self.n_head, head_dim).permute(0, 2, 1, 3).contiguous()
+
+    mask = self.mask[:, :, :T, :T].to(device=x.device)
+    invalid_positions = (mask[0, 0] == 0)
+    scale = math.sqrt(head_dim)
+
+    outputs = []
+    for b in range(B):
+      head_outputs = []
+      for h in range(self.n_head):
+        q_bh = q[b, h]                                            # shape (T, head_dim)
+        k_bh = k[b, h]                                            # shape (T, head_dim)
+        v_bh = v[b, h]                                            # shape (T, head_dim)
+
+        scores = q_bh @ k_bh.transpose(0, 1)                      # Q K^T
+        scores = scores / scale                                   # Q K^T / sqrt(head_dim)
+        scores = scores.masked_fill(invalid_positions, float('-inf'))
+
+        weights = F.softmax(scores, dim=-1)                       # softmax(Q K^T / sqrt(head_dim))
+        head_outputs.append(weights @ v_bh)                       # softmax(...) V
+
+      outputs.append(torch.stack(head_outputs, dim=0))
+
+    y = torch.stack(outputs, dim=0)
+    y = y.permute(0, 2, 1, 3).contiguous().view(B, T, C)
     assert y.shape == (B, T, C)
     return y
 
